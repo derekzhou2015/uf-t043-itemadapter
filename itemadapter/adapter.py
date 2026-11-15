@@ -489,6 +489,13 @@ class ItemAdapter(MutableMapping[str, Any]):
     def _asdict(cls, obj: object) -> object:
         if isinstance(obj, dict):
             return {key: cls._asdict(value) for key, value in obj.items()}
+        if isinstance(obj, tuple) and hasattr(type(obj), "_fields"):
+            # A named tuple takes one positional argument per field, unlike
+            # other containers, which take a single iterable. Rebuilding it from
+            # an iterable raises TypeError when it has no defaults, and stores an
+            # unconsumed iterable in its first field otherwise.
+            named_tuple_class: Any = type(obj)
+            return cast("object", named_tuple_class(*(cls._asdict(x) for x in obj)))
         if isinstance(obj, (list, set, tuple)):
             return obj.__class__(cls._asdict(x) for x in obj)
         if isinstance(obj, cls):

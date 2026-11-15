@@ -1,5 +1,15 @@
 # Changelog
 
+### (unreleased)
+
+Fixed `ItemAdapter.asdict()` for named tuples (`tuple` subclasses with
+`_fields`, e.g. `typing.NamedTuple` classes). Named tuples without default
+values raised `TypeError` on conversion, and named tuples with default values
+had their first field replaced with an unconsumed generator, only failing later
+during JSON serialization. Named tuples are now rebuilt field by field, keeping
+their type, their field names, and converting nested items as any other
+container.
+
 ### 0.14.0 (2026-10-29)
 
 Removed support for Python 3.9 and 3.10, and added support for Python 3.15

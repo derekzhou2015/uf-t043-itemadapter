@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from collections.abc import KeysView
 from types import MappingProxyType
+from typing import NamedTuple
 
 import pytest
 from packaging.version import Version
@@ -527,3 +529,136 @@ class TestAttrsClassicItem(NonDictTestMixin):
     item_class_empty = AttrsClassicItemEmpty
     item_class_json_schema = AttrsClassicItemJsonSchema
     expected_json_schema = TestDataClassItem.expected_json_schema
+
+
+class PointWithoutDefaults(NamedTuple):
+    x: int
+    y: int
+
+
+class PointWithDefaults(NamedTuple):
+    x: int
+    y: int = 0
+
+
+class NestedPoint(NamedTuple):
+    label: str
+    point: PointWithoutDefaults
+
+
+class TestAsDictNamedTuple:
+    """asdict() must keep named tuples typed and fully converted."""
+
+    def test_named_tuple_without_defaults(self):
+        adapter = ItemAdapter({"point": PointWithoutDefaults(1, 2)})
+        result = adapter.asdict()
+        assert result["point"] == PointWithoutDefaults(1, 2)
+        assert type(result["point"]) is PointWithoutDefaults
+        assert result["point"].x == 1
+        assert result["point"].y == 2
+
+    def test_named_tuple_with_defaults(self):
+        adapter = ItemAdapter({"point": PointWithDefaults(1)})
+        result = adapter.asdict()
+        assert result["point"] == PointWithDefaults(1, 0)
+        assert type(result["point"]) is PointWithDefaults
+        assert result["point"].x == 1
+        assert result["point"].y == 0
+
+    def test_named_tuple_with_defaults_explicit_value(self):
+        adapter = ItemAdapter({"point": PointWithDefaults(1, 2)})
+        result = adapter.asdict()
+        assert result["point"] == PointWithDefaults(1, 2)
+        assert type(result["point"]) is PointWithDefaults
+
+    def test_nested_named_tuple_values_converted(self):
+        """Nested items inside named tuple fields must be converted, not left
+        as unconsumed generators."""
+        adapter = ItemAdapter(
+            {"point": PointWithoutDefaults(DataClassItem(name="a", value=1), 3)},
+        )
+        point = adapter.asdict()["point"]
+        assert type(point) is PointWithoutDefaults
+        assert point.x == {"name": "a", "value": 1}
+        assert point.y == 3
+
+    def test_named_tuple_is_json_serializable(self):
+        adapter = ItemAdapter({"point": PointWithDefaults(1)})
+        result = adapter.asdict()
+        # The failure mode being guarded against is lazy: an unconsumed
+        # generator only blows up here, far from the conversion itself.
+        assert json.loads(json.dumps(result)) == {"point": [1, 0]}
+
+    def test_named_tuple_mixed_nested(self):
+        """Named tuples mixed with other containers and items in one item."""
+        item = {
+            "plain": PointWithoutDefaults(1, 2),
+            "with_default": PointWithDefaults(3),
+            "pairs": (PointWithoutDefaults(4, 5), PointWithDefaults(6)),
+            "list": [PointWithoutDefaults(7, 8)],
+            "nested": NestedPoint("origin", PointWithoutDefaults(9, 10)),
+        }
+        result = ItemAdapter(item).asdict()
+        assert result == {
+            "plain": PointWithoutDefaults(1, 2),
+            "with_default": PointWithDefaults(3, 0),
+            "pairs": (PointWithoutDefaults(4, 5), PointWithDefaults(6, 0)),
+            "list": [PointWithoutDefaults(7, 8)],
+            "nested": NestedPoint("origin", PointWithoutDefaults(9, 10)),
+        }
+        assert type(result["with_default"]) is PointWithDefaults
+        assert type(result["nested"]) is NestedPoint
+        assert result["nested"].label == "origin"
+
+    def test_field_access_is_unaffected(self):
+        """Reading the field itself, by key or by name, must keep returning the
+        named tuple unchanged; ``asdict()`` must not mutate or replace it."""
+        point = PointWithDefaults(1)
+        adapter = ItemAdapter({"point": point})
+        assert adapter["point"] is point
+        assert adapter["point"].x == 1
+        assert adapter["point"].y == 0
+        adapter.asdict()
+        assert adapter["point"] is point
+        assert adapter["point"].x == 1
+
+    def test_dict_and_sequence_paths_agree(self):
+        """A named tuple must convert the same way wherever it is nested."""
+        point = PointWithDefaults(1)
+        item = DataClassItemNested(
+            nested=DataClassItem(name="a", value=1),
+            adapter=ItemAdapter({"n": 1}),
+            dict_={"point": point},
+            list_=[point],
+            set_={point},
+            tuple_=(point,),
+            int_=0,
+        )
+        result = ItemAdapter(item).asdict()
+        expected = PointWithDefaults(1, 0)
+        assert result["dict_"] == {"point": expected}
+        assert result["list_"] == [expected]
+        assert result["tuple_"] == (expected,)
+        assert result["set_"] == {expected}
+        # Named tuples compare equal to plain tuples, so equality alone would
+        # not catch a lost type.
+        assert type(result["dict_"]["point"]) is PointWithDefaults
+        assert type(result["list_"][0]) is PointWithDefaults
+        assert type(result["tuple_"][0]) is PointWithDefaults
+        assert type(next(iter(result["set_"]))) is PointWithDefaults
+        assert result["dict_"]["point"].y == 0
+
+        # The plain dict conversion path must agree with the item path.
+        dict_path = ItemAdapter({"point": point}).asdict()
+        assert result["dict_"] == dict_path
+        assert type(dict_path["point"]) is PointWithDefaults
+
+    def test_dict_conversion_does_not_recurse_but_is_unaffected(self):
+        """dict(adapter) does not recurse, and must keep returning the named
+        tuple itself rather than raising or replacing its fields."""
+        point = PointWithoutDefaults(1, 2)
+        adapter = ItemAdapter({"point": point})
+        assert dict(adapter) == {"point": PointWithoutDefaults(1, 2)}
+        assert dict(adapter)["point"] is point
+        assert dict(adapter)["point"].x == 1
+
